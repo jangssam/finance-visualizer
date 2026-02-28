@@ -1,13 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/lib/db';
-import type { RowDataPacket } from 'mysql2';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
-interface Corporation extends RowDataPacket {
+interface Corporation {
   corp_code: string;
   corp_name: string;
   corp_eng_name: string;
   stock_code: string;
   modify_date: string;
+}
+
+let corpsCache: Corporation[] | null = null;
+
+function getCorps(): Corporation[] {
+  if (corpsCache) return corpsCache;
+  const filePath = join(process.cwd(), 'data', 'corps.json');
+  const data = readFileSync(filePath, 'utf-8');
+  corpsCache = JSON.parse(data) as Corporation[];
+  return corpsCache;
 }
 
 export async function GET(request: NextRequest) {
@@ -23,24 +33,33 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const results = await query<Corporation>(
-      `SELECT corp_code, corp_name, corp_eng_name, stock_code
-       FROM corporations
-       WHERE corp_name LIKE ? OR corp_eng_name LIKE ?
-       ORDER BY 
-         CASE WHEN corp_name = ? THEN 0
-              WHEN corp_name LIKE ? THEN 1
-              ELSE 2 END,
-         corp_name ASC
-       LIMIT 20`,
-      [`%${q}%`, `%${q}%`, q, `${q}%`]
+    const corps = getCorps();
+    const lower = q.toLowerCase();
+
+    const matched = corps.filter(c =>
+      c.corp_name.toLowerCase().includes(lower) ||
+      c.corp_eng_name.toLowerCase().includes(lower)
     );
+
+    matched.sort((a, b) => {
+      const aName = a.corp_name.toLowerCase();
+      const bName = b.corp_name.toLowerCase();
+      if (aName === lower) return -1;
+      if (bName === lower) return 1;
+      if (aName.startsWith(lower) && !bName.startsWith(lower)) return -1;
+      if (!aName.startsWith(lower) && bName.startsWith(lower)) return 1;
+      return aName.localeCompare(bName);
+    });
+
+    const results = matched.slice(0, 20).map(({ corp_code, corp_name, corp_eng_name, stock_code }) => ({
+      corp_code, corp_name, corp_eng_name, stock_code,
+    }));
 
     return NextResponse.json({ results });
   } catch (error) {
     console.error('Search error:', error);
     return NextResponse.json(
-      { error: 'DB 검색 중 오류가 발생했습니다.' },
+      { error: '검색 중 오류가 발생했습니다.' },
       { status: 500 }
     );
   }
